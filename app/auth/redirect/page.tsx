@@ -2,81 +2,62 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
 type ProfileRole =
-| "customer"
-| "worker"
-| "contractor"
-| "admin";
+  | "owner"
+  | "field_manager"
+  | "office"
+  | "apartment_company"
+  | "worker"
+  | "contractor";
 
 export default async function AuthRedirectPage() {
-const supabase = await createClient();
+  const supabase = await createClient();
 
-const {
-data: { user },
-error: userError,
-} = await supabase.auth.getUser();
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
 
-if (userError || !user) {
-redirect("/login");
-}
+  if (userError || !user) {
+    redirect("/login");
+  }
 
-const { data: profile, error: profileError } =
-await supabase
-.from("profiles")
-.select("role, active")
-.eq("id", user.id)
-.maybeSingle();
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("role, active")
+    .eq("id", user.id)
+    .maybeSingle();
 
-if (profileError) {
-console.error(
-"PROFILE ROLE LOOKUP ERROR:",
-profileError
-);
+  if (profileError) {
+    console.error("PROFILE ROLE LOOKUP ERROR:", profileError);
+    redirect("/login?error=profile_lookup_failed");
+  }
 
-redirect(
-  "/login?error=profile_lookup_failed"
-);
+  if (!profile) {
+    redirect("/signup");
+  }
 
+  if (profile.active === false) {
+    redirect("/login?error=account_inactive");
+  }
 
-}
+  const role = profile.role as ProfileRole;
 
-if (!profile) {
-/*
-* A Google user may be authenticating for the
-* first time and not have a profile yet.
-*
-* Send them to account setup instead of giving
-* them elevated access.
-*/
-redirect("/signup");
-}
+  switch (role) {
+    case "owner":
+    case "field_manager":
+    case "office":
+      redirect("/dashboard");
 
-if (profile.active === false) {
-redirect(
-"/login?error=account_inactive"
-);
-}
+    case "worker":
+      redirect("/worker");
 
-const role =
-profile.role as ProfileRole;
+    case "contractor":
+      redirect("/contractor");
 
-switch (role) {
-case "admin":
-redirect("/dashboard");
+    case "apartment_company":
+      redirect("/customer");
 
-case "worker":
-  redirect("/worker");
-
-case "contractor":
-  redirect("/contractor");
-
-case "customer":
-  redirect("/customer");
-
-default:
-  redirect(
-    "/login?error=unknown_role"
-  );
-
-
-}
+    default:
+      redirect("/login?error=unknown_role");
+  }
 }
