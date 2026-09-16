@@ -45,6 +45,21 @@ export default function WorkerPage() {
     finally { setBusy(""); }
   }
 
+  async function upload(jobId: string, kind: "photo" | "document", file: File | undefined) {
+    if (!file) return;
+    setBusy(`${kind}:${jobId}`); setError(""); setMessage("");
+    try {
+      const form = new FormData();
+      form.set("job_id", jobId); form.set("kind", kind); form.set("file", file);
+      const response = await fetch("/api/jobs/files", { method: "POST", body: form });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error ?? "Upload failed.");
+      setMessage(`${kind === "photo" ? "Photo" : "Document"} uploaded successfully.`);
+      await load();
+    } catch (err) { setError(err instanceof Error ? err.message : "Upload failed."); }
+    finally { setBusy(""); }
+  }
+
   const assignmentFor = (jobId: string) => data.assignments.find((item) => item.job_id === jobId);
   const itemsFor = (jobId: string) => data.lineItems.filter((item) => item.job_id === jobId);
 
@@ -55,7 +70,7 @@ export default function WorkerPage() {
       <div className="mx-auto max-w-5xl">
         <p className="text-sm font-semibold text-blue-600">Field Operations</p>
         <h1 className="mt-1 text-3xl font-bold text-slate-900">My Jobs</h1>
-        <p className="mt-2 text-sm text-slate-500">Accept assignments, start work, record Work Performed, submit paperwork, and complete Jobs.</p>
+        <p className="mt-2 text-sm text-slate-500">Accept assignments, start work, record Work Performed, upload job evidence, submit paperwork, and complete Jobs.</p>
         {error && <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
         {message && <div className="mt-5 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">{message}</div>}
 
@@ -86,9 +101,18 @@ export default function WorkerPage() {
               </div>
 
               <div className="mt-6 border-t border-slate-200 pt-6">
-                <h3 className="font-bold text-slate-900">Completion Documentation</h3>
+                <h3 className="font-bold text-slate-900">Job Evidence</h3>
+                <p className="mt-1 text-xs text-slate-500">Images: JPG, PNG, or WebP. Documents: PDF, JPG, or PNG. Maximum 10 MB.</p>
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <input value={paperworkPath} onChange={(e) => setPaperworkPath(e.target.value)} placeholder="Storage path for completion paperwork" className="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+                  <label className="rounded-xl border border-dashed border-slate-300 p-4 text-sm font-semibold text-slate-700">Upload photo<input type="file" accept="image/jpeg,image/png,image/webp" className="mt-2 block w-full text-xs" disabled={busy === `photo:${job.id}`} onChange={(e) => { void upload(job.id, "photo", e.target.files?.[0]); e.currentTarget.value = ""; }} /></label>
+                  <label className="rounded-xl border border-dashed border-slate-300 p-4 text-sm font-semibold text-slate-700">Upload document<input type="file" accept="application/pdf,image/jpeg,image/png" className="mt-2 block w-full text-xs" disabled={busy === `document:${job.id}`} onChange={(e) => { void upload(job.id, "document", e.target.files?.[0]); e.currentTarget.value = ""; }} /></label>
+                </div>
+              </div>
+
+              <div className="mt-6 border-t border-slate-200 pt-6">
+                <h3 className="font-bold text-slate-900">Completion Documentation</h3>
+                <div className="mt-3 grid gap-3 md:grid-cols-[2fr_auto]">
+                  <input value={paperworkPath} onChange={(e) => setPaperworkPath(e.target.value)} placeholder="Existing storage path for completion paperwork" className="rounded-xl border border-slate-300 px-3 py-2 text-sm" />
                   <button disabled={!paperworkPath.trim()} onClick={() => void action({ action: "paperwork", job_id: job.id, paperwork_type: "completion", storage_path: paperworkPath })} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold disabled:opacity-50">Submit Paperwork</button>
                 </div>
               </div>
