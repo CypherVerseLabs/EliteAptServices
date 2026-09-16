@@ -26,15 +26,12 @@ export async function POST(request: Request) {
     .eq("id", user.id)
     .maybeSingle();
   if (profileError) return fail(profileError.message, 500);
-  if (!profile?.active || !["worker", "contractor"].includes(profile.role)) {
-    return fail("Worker or contractor access required.", 403);
-  }
+  if (!profile?.active || !["worker", "contractor"].includes(profile.role)) return fail("Worker or contractor access required.", 403);
 
   const form = await request.formData();
   const jobId = String(form.get("job_id") ?? "").trim();
   const kind = String(form.get("kind") ?? "").trim();
   const file = form.get("file");
-
   if (!jobId || !(file instanceof File)) return fail("job_id and a file are required.");
   if (file.size <= 0) return fail("The selected file is empty.");
   if (file.size > MAX_BYTES) return fail("Files must be 10 MB or smaller.");
@@ -43,18 +40,28 @@ export async function POST(request: Request) {
   const allowed = kind === "photo" ? IMAGE_TYPES : DOCUMENT_TYPES;
   if (!allowed.has(file.type)) return fail(`Unsupported ${kind} file type.`);
 
-  const assignmentQuery = supabase
+  let assignmentQuery = supabase
     .from("job_assignments")
     .select("id, job_id, worker_id, contractor_id, status")
     .eq("job_id", jobId)
     .neq("status", "removed");
 
-  const { data: assignments, error: assignmentError } = await assignmentQuery;
-  if (assignmentError) return fail(assignmentError.message, 500);
+  if (profile.role === "worker") {
+    assignmentQuery = assignmentQuery.eq("worker_id", user.id);
+  } else {
+    const { data: contractor, error: contractorError } = await supabase
+      .from("contractors")
+      .select("id, active, email")
+      .eq("id", user.id)
+      .eq("active", true)
+      .maybeSingle();
+    if (contractorError) return fail(contractorError.message, 500);
+    if (!contractor || contractor.email?.toLowerCase() !== user.email?.toLowerCase()) return fail("Active contractor record not found.", 403);
+    assignmentQuery = assignmentQuery.eq("contractor_id", contractor.id);
+  }
 
-  const assignment = (assignments ?? []).find((item) =>
-    profile.role === "worker" ? item.worker_id === user.id : item.contractor_id === user.id
-  );
+  const { data: assignment, error: assignmentError } = await assignmentQuery.order("assigned_at", { ascending: false }).limit(1).maybeSingle();
+  if (assignmentError) return fail(assignmentError.message, 500);
   if (!assignment) return fail("You are not assigned to this Job.", 403);
 
   const admin = createAdminClient();
@@ -67,9 +74,7 @@ export async function POST(request: Request) {
       fileSizeLimit: MAX_BYTES,
       allowedMimeTypes: Array.from(new Set([...IMAGE_TYPES, ...DOCUMENT_TYPES])),
     });
-    if (createBucketError && !/already exists/i.test(createBucketError.message)) {
-      return fail(`Unable to initialize private file storage: ${createBucketError.message}`, 503);
-    }
+    if (createBucketError && !/already exists/i.test(createBucketError.message)) return fail(`Unable to initialize private file storage: ${createBucketError.message}`, 503);
   }
 
   const path = `jobs/${jobId}/${profile.role}/${user.id}/${crypto.randomUUID()}-${safeFileName(file.name)}`;
@@ -82,17 +87,13 @@ export async function POST(request: Request) {
   if (uploadError) return fail(`File upload failed: ${uploadError.message}`, 500);
 
   if (kind === "photo") {
-    const { data, error } = await supabase
-      .from("job_photos")
-      .insert({
-        job_id: jobId,
-        uploaded_by: user.id,
-        photo_type: "work_performed",
-        storage_path: `${BUCKET}/${path}`,
-        caption: file.name,
-      })
-      .select("id, job_id, photo_type, storage_path, caption, created_at")
-      .single();
+    const { data, error } = await supabase.from("job_photos").insert({
+      job_id: jobId,
+      uploaded_by: user.id,
+      photo_type: "work_performed",
+      storage_path: `${BUCKET}/${path}`,
+      caption: file.name,
+    }).select("id, job_id, photo_type, storage_path, caption, created_at").single();
     if (error || !data) {
       await admin.storage.from(BUCKET).remove([path]);
       return fail(error?.message ?? "Unable to save photo record.", 500);
@@ -100,21 +101,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ photo: data }, { status: 201 });
   }
 
-  const { data, error } = await supabase
-    .from("job_documents")
-    .insert({
-      job_id: jobId,
-      uploaded_by: user.id,
-      document_type: "work_performed",
-      storage_path: `${BUCKET}/${path}`,
-      file_name: file.name,
-    })
-    .select("id, job_id, document_type, storage_path, file_name, created_at")
-    .single();
+  const { data, error } = await supabase.from("job_documents").insert({
+    job_id: jobId,
+    uploaded_by: user.id,
+    document_type: "work_performed",
+    storage_path: `${BUCKET}/${path}`,
+    file_name: file.name,
+  }).select("id, job_id, document_type, storage_path, file_name, created_at").single();
   if (error || !data) {
     await admin.storage.from(BUCKET).remove([path]);
     return fail(error?.message ?? "Unable to save document record.", 500);
   }
-
   return NextResponse.json({ document: data }, { status: 201 });
 }
