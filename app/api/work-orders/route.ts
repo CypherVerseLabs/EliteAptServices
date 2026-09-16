@@ -44,7 +44,6 @@ export async function POST(request: Request) {
   if (!propertyId || !serviceCategory || !title) return fail("property_id, service_category, and title are required.");
   if (!requestedCompanyId) return fail("apartment_company_id is required.");
   if (!submissionId) return fail("submission_id is required for duplicate-submission protection.");
-
   if (role === "apartment_company" && requestedBy !== profile.id) return fail("Customers may only create Work Orders for themselves.", 403);
 
   const { data: property, error: propertyError } = await supabase
@@ -59,12 +58,7 @@ export async function POST(request: Request) {
 
   let unit: { id: string; property_id: string; unit_number: string | null; square_feet: number | null; bedrooms: string | null; bathrooms: string | null; occupancy: string | null } | null = null;
   if (unitId) {
-    const { data, error } = await supabase
-      .from("units")
-      .select("id, property_id, unit_number, square_feet, bedrooms, bathrooms, occupancy")
-      .eq("id", unitId)
-      .eq("property_id", propertyId)
-      .maybeSingle();
+    const { data, error } = await supabase.from("units").select("id, property_id, unit_number, square_feet, bedrooms, bathrooms, occupancy").eq("id", unitId).eq("property_id", propertyId).maybeSingle();
     if (error) return fail(error.message, 500);
     if (!data) return fail("Unit does not belong to the selected Property.", 403);
     unit = data;
@@ -87,15 +81,9 @@ export async function POST(request: Request) {
   const pricingType = pricing?.pricing_type ?? "per_unit";
   const pricingTotal = pricingType === "per_estimate" ? 0 : Number((unitPrice * quantity).toFixed(2));
 
-  if (submissionId) {
-    const { data: duplicate, error: duplicateError } = await supabase
-      .from("work_orders")
-      .select("id, work_order_number, status")
-      .eq("submission_id", submissionId)
-      .maybeSingle();
-    if (duplicateError) return fail(duplicateError.message, 500);
-    if (duplicate) return NextResponse.json({ workOrder: duplicate, duplicate: true });
-  }
+  const { data: duplicate, error: duplicateError } = await supabase.from("work_orders").select("id, work_order_number, status").eq("submission_id", submissionId).maybeSingle();
+  if (duplicateError) return fail(duplicateError.message, 500);
+  if (duplicate) return NextResponse.json({ workOrder: duplicate, duplicate: true });
 
   const { data: workOrder, error: insertError } = await supabase
     .from("work_orders")
@@ -105,6 +93,7 @@ export async function POST(request: Request) {
       unit_id: unitId,
       requested_by: requestedBy,
       service_category: serviceCategory,
+      service: serviceCategory,
       title,
       description,
       priority,
@@ -134,6 +123,5 @@ export async function POST(request: Request) {
     .single();
 
   if (insertError || !workOrder) return fail(insertError?.message ?? "Unable to create Work Order.", 500);
-
   return NextResponse.json({ workOrder, duplicate: false }, { status: 201 });
 }
