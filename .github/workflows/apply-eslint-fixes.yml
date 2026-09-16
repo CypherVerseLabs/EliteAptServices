@@ -1,0 +1,155 @@
+name: Apply ESLint source fixes
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply targeted lint fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          def edit(path, replacements):
+              p = Path(path)
+              s = p.read_text(encoding="utf-8")
+              original = s
+              for old, new in replacements:
+                  if old not in s:
+                      raise SystemExit(f"Expected text not found in {path}: {old[:100]!r}")
+                  s = s.replace(old, new, 1)
+              if s != original:
+                  p.write_text(s, encoding="utf-8")
+
+          # React set-state-in-effect: effect-triggered loaders keep their
+          # initial loading state in useState and only update after awaits.
+          for path in [
+              "app/contractor/page.tsx",
+              "app/customer/request/page.tsx",
+              "app/dashboard/payroll/page.tsx",
+              "app/worker/page.tsx",
+              "app/dashboard/workflow/page.tsx",
+          ]:
+              p = Path(path)
+              s = p.read_text(encoding="utf-8")
+              s2 = re.sub(r'(async function load(?:[A-Za-z]*)\([^)]*\) \{\n)(\s*)setLoading\(true\);\n\s*setError\(""\);', r'\1', s, count=1)
+              s2 = re.sub(r'(async function load(?:[A-Za-z]*)\([^)]*\) \{\n)(\s*)setLoading\(true\); setError\(""\);', r'\1', s2, count=1)
+              if s2 == s:
+                  raise SystemExit(f"Expected loader state setters not found in {path}")
+              p.write_text(s2, encoding="utf-8")
+
+          # Reports has a refresh flag; the initial state is already loading.
+          edit("app/dashboard/reports/page.tsx", [
+              ('''      if (refresh) {\n        setRefreshing(true);\n      } else {\n        setLoading(true);\n      }\n\n      setErrorMessage("");''', '''      if (refresh) {\n        setRefreshing(true);\n      }'''),
+          ])
+
+          # Pricing loader: do not synchronously set state from the effect-triggered loader.
+          edit("app/components/work-orders/pricing-section.tsx", [
+              ('''    if (!serviceCategory) {\n      setPricing(null);\n      setQuantity(1);\n      return;\n    }''', '''    if (!serviceCategory) {\n      return;\n    }'''),
+              ('''    async function loadPricing() {\n      setLoading(true);\n      setError("");''', '''    async function loadPricing() {'''),
+          ])
+
+          # Work-order detail loaders: initial state represents loading; pricing state is updated after the query.
+          edit("app/dashboard/work-orders/[id]/page.tsx", [
+              ('''    try {\n      setLoading(true);\n      setError("");\n\n      const { data, error: supabaseError } =''', '''    try {\n      const { data, error: supabaseError } ='''),
+              ('''    try {\n      setPricingLoading(true);\n      setPricingError("");\n\n      const pricingId =''', '''    try {\n      const pricingId ='''),
+              ('''      } else {\n        setPricingItem(null);\n        setPricingLoading(false);\n        return;\n      }''', '''      } else {\n        return;\n      }'''),
+          ])
+
+          # Customer page: declaration before effect, with initial loading state in useState.
+          p = Path("app/customer/page.tsx")
+          s = p.read_text(encoding="utf-8")
+          block = '''  useEffect(() => {\n    loadCustomerData();\n  }, []);\n\n  async function loadCustomerData() {\n    setLoading(true);\n    setErrorMessage("");'''
+          if block not in s:
+              raise SystemExit("Customer loader block not found")
+          s = s.replace(block, '''  async function loadCustomerData() {''', 1)
+          marker = '''  async function handleLogout()'''
+          if marker not in s:
+              raise SystemExit("Customer logout marker not found")
+          s = s.replace(marker, '''  useEffect(() => {\n    void loadCustomerData();\n  }, []);\n\n  async function handleLogout()''', 1)
+          p.write_text(s, encoding="utf-8")
+
+          # Login page: URL callback errors are derived during render instead of state updates in an effect.
+          p = Path("app/login/page.tsx")
+          s = p.read_text(encoding="utf-8")
+          s = s.replace('import { FormEvent, useEffect, useState } from "react";', 'import { FormEvent, useState } from "react";', 1)
+          if 'import Link from "next/link";' not in s:
+              s = s.replace('"use client";\n\n', '"use client";\n\nimport Link from "next/link";\n', 1)
+          if 'import { useSearchParams } from "next/navigation";' not in s:
+              s = s.replace('import Link from "next/link";\n', 'import Link from "next/link";\nimport { useSearchParams } from "next/navigation";\n', 1)
+          effect = '''useEffect(() => {\nconst params = new URLSearchParams(window.location.search);\n\nconst callbackError = params.get("error");\nconst callbackMessage = params.get("message");\n\nif (callbackError === "auth_callback_failed") {\n  setError(\n    "Google sign-in could not be completed. Please try again."\n  );\n}\n\nif (callbackMessage) {\n  setError(callbackMessage);\n}\n\n}, []);\n'''
+          if effect not in s:
+              raise SystemExit("Login auth callback effect not found")
+          s = s.replace(effect, '', 1)
+          needle = 'const supabase = createClient();\n\n'
+          if needle not in s:
+              raise SystemExit("Login supabase marker not found")
+          s = s.replace(needle, '''const supabase = createClient();\nconst searchParams = useSearchParams();\nconst callbackError = searchParams.get("error");\nconst callbackMessage = searchParams.get("message");\n\n''', 1)
+          s = s.replace('const [error, setError] = useState("");', '''const [error, setError] = useState(() =>\n  callbackMessage ||\n  (callbackError === "auth_callback_failed"\n    ? "Google sign-in could not be completed. Please try again."\n    : "")\n);''', 1)
+          s = s.replace('''        <a\n          href="/"''', '''        <Link\n          href="/"''', 1)
+          s = s.replace('''          </a>\n        </div>''', '''          </Link>\n        </div>''', 1)
+          s = s.replace('''          <a\n            href="/"''', '''          <Link\n            href="/"''', 1)
+          s = s.replace('''          </a>\n\n        </div>''', '''          </Link>\n\n        </div>''', 1)
+          s = s.replace('''          <a\n            href="/"''', '''          <Link\n            href="/"''', 1)
+          s = s.replace('''          </a>\n\n        </div>''', '''          </Link>\n\n        </div>''', 1)
+          p.write_text(s, encoding="utf-8")
+
+          # Workflow page internal navigation uses Next Link.
+          p = Path("app/dashboard/workflow/page.tsx")
+          s = p.read_text(encoding="utf-8")
+          if 'import Link from "next/link";' not in s:
+              s = s.replace('"use client";\n\n', '"use client";\n\nimport Link from "next/link";\n', 1)
+          s = s.replace('<a href={`/dashboard/jobs/${job.id}`}', '<Link href={`/dashboard/jobs/${job.id}`}', 1)
+          s = s.replace('</a></div>}', '</Link></div>}', 1)
+          p.write_text(s, encoding="utf-8")
+
+          # prefer-const in payroll preparation.
+          edit("app/api/payroll/prepare/route.ts", [
+              ('''  let { data: period, error: periodError } = await supabase.from("payroll_periods").select("id, status").eq("week_start", isoDate(weekStartDate)).eq("week_end", isoDate(weekEndDate)).maybeSingle();\n  if (periodError) return fail(periodError.message, 500);''', '''  const periodResult = await supabase.from("payroll_periods").select("id, status").eq("week_start", isoDate(weekStartDate)).eq("week_end", isoDate(weekEndDate)).maybeSingle();\n  const periodError = periodResult.error;\n  let period = periodResult.data;\n  if (periodError) return fail(periodError.message, 500);'''),
+          ])
+
+          # Unescaped apostrophes in JSX text.
+          apostrophe_fixes = {
+              "app/login/forgot-password/page.tsx": [("We'll send", "We&apos;ll send"), (", we've sent", ", we&apos;ve sent")],
+              "app/dashboard/contractors/[id]/edit/page.tsx": [("contractor's primary", "contractor&apos;s primary")],
+              "app/dashboard/pricing/page.tsx": [("company's initial", "company&apos;s initial")],
+              "app/dashboard/pricing/pricing-form.tsx": [("won't be available", "won&apos;t be available")],
+              "app/dashboard/workers/new/page.tsx": [("worker's basic", "worker&apos;s basic")],
+              "app/dashboard/workers/[id]/edit/page.tsx": [("worker's information", "worker&apos;s information"), ("worker's role", "worker&apos;s role")],
+              "app/customer/request/request-form.tsx": [("customer's property", "customer&apos;s property"), ("unit's stored", "unit&apos;s stored")],
+          }
+          for path, pairs in apostrophe_fixes.items():
+              p = Path(path); s = p.read_text(encoding="utf-8")
+              for old, new in pairs:
+                  if old not in s:
+                      raise SystemExit(f"Apostrophe text not found in {path}: {old!r}")
+                  s = s.replace(old, new, 1)
+              p.write_text(s, encoding="utf-8")
+
+          # Apostrophe in the work-order pricing expression.
+          p = Path("app/dashboard/work-orders/[id]/page.tsx")
+          s = p.read_text(encoding="utf-8")
+          s = s.replace("unit's ${workOrder.square_feet", "unit&apos;s ${workOrder.square_feet", 1)
+          p.write_text(s, encoding="utf-8")
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/apply-eslint-fixes.yml
+          git add app .github/workflows/apply-eslint-fixes.yml
+          if git diff --cached --quiet; then
+            echo "No lint source changes needed."
+          else
+            git commit -m "Fix ESLint errors in application source"
+            git push
+          fi
