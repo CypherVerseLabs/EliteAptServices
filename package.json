@@ -7,8 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "qa:seed": "node scripts/seed-qa-data.mjs",
-    "qa:cleanup": "node scripts/cleanup-qa-data.mjs"
+    "qa:seed": "node --import ./scripts/load-qa-env.mjs scripts/seed-qa-data.mjs",
+    "qa:cleanup": "node --import ./scripts/load-qa-env.mjs scripts/cleanup-qa-data.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
