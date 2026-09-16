@@ -53,7 +53,9 @@ export async function POST(request: Request) {
   if (!pricing) return fail("No active service pricing is configured for this company and service.", 422);
 
   let quantity = Number(body.pricing_quantity ?? 1);
-  if (pricing.pricing_type === "per_sq_ft") {
+  if (pricing.pricing_type === "flat") {
+    quantity = 1;
+  } else if (pricing.pricing_type === "per_sq_ft") {
     if (!unit?.square_feet) return fail("A unit with square footage is required for per-square-foot pricing.", 422);
     quantity = Number(unit.square_feet);
   }
